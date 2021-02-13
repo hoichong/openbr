@@ -2,8 +2,12 @@
 #define EVALUTILS_EVALUTILS_H
 
 #include <openbr/openbr_plugin.h>
+#include <openbr/core/qtutils.h>
+#include <opencv2/highgui/highgui.hpp>
 
-struct Detection
+namespace EvalUtils
+{
+    struct Detection
 {
     QRectF boundingBox;
     QString filePath;
@@ -13,16 +17,20 @@ struct Detection
     // with an ignored truth detection will not count as a true positive, false positive,
     // true negative, or false negative, it will simply be ignored.
     bool ignore;
+    QString pose;
 
     Detection() {}
-    Detection(const QRectF &boundingBox_, const QString &filePath = QString(), float confidence_ = -1, bool ignore_ = false)
-        : boundingBox(boundingBox_), filePath(filePath), confidence(confidence_), ignore(ignore_) {}
+    Detection(const QRectF &boundingBox, const QString &filePath = QString(), float confidence = -1, bool ignore = false, const QString &pose = "Frontal") :
+        boundingBox(boundingBox),
+        filePath(filePath),
+        confidence(confidence),
+        ignore(ignore),
+        pose(pose)
+    {}
 
-    float area() const { return boundingBox.width() * boundingBox.height(); }
     float overlap(const Detection &other) const
     {
-        const Detection intersection(boundingBox.intersected(other.boundingBox));
-        return intersection.area() / (area() + other.area() - intersection.area());
+        return QtUtils::overlap(boundingBox, other.boundingBox);
     }
 };
 
@@ -39,17 +47,30 @@ struct SortedDetection
 struct ResolvedDetection
 {
     QString filePath;
-    QRectF boundingBox;
+    QRectF boundingBox, groundTruthBoundingBox;
     float confidence, overlap;
-    ResolvedDetection() : confidence(-1), overlap(-1) {}
-    ResolvedDetection(const QString &filePath, const QRectF &boundingBox, float confidence_, float overlap_) :
-        filePath(filePath), boundingBox(boundingBox), confidence(confidence_), overlap(overlap_) {}
+    bool poseMatch;
+    ResolvedDetection() :
+    confidence(-1),
+        overlap(-1)
+        {}
+
+ResolvedDetection(const QString &filePath, const QRectF &boundingBox, float confidence, float overlap, const QRectF &groundTruthBoundingBox, bool poseMatch) :
+    filePath(filePath),
+    boundingBox(boundingBox),
+    groundTruthBoundingBox(groundTruthBoundingBox),
+    confidence(confidence),
+    overlap(overlap),
+    poseMatch(poseMatch)
+    {}
+
     inline bool operator<(const ResolvedDetection &other) const { return confidence > other.confidence; }
 };
 
 struct Detections
 {
     QList<Detection> predicted, truth;
+    QSize imageSize;
 };
 
 struct DetectionKey : public QString
@@ -70,16 +91,14 @@ struct DetectionOperatingPoint
     float Recall, FalsePositiveRate, Precision, Confidence;
     DetectionOperatingPoint() : Recall(-1), FalsePositiveRate(-1), Precision(-1) {}
     DetectionOperatingPoint(float TP, float FP, float totalPositives, float numImages, float confidence)
-        : Recall(TP/totalPositives), FalsePositiveRate(FP/numImages), Precision(TP/(TP+FP)), Confidence(confidence) {}
+        : Recall(totalPositives ? TP/totalPositives : 0), FalsePositiveRate(FP/numImages), Precision(TP/(TP+FP)), Confidence(confidence) {}
 };
 
-namespace EvalUtils
-{
     // Detection
     DetectionKey getDetectKey(const br::FileList &files);
     QList<Detection> getDetections(const DetectionKey &key, const br::File &f, bool isTruth);
     QMap<QString, Detections> getDetections(const br::File &predictedGallery, const br::File &truthGallery);
-    QMap<QString, Detections> filterDetections(const QMap<QString, Detections> &allDetections, int threshold, bool useMin=true);
+    QMap<QString, Detections> filterDetections(const QMap<QString, Detections> &allDetections, int threshold, bool useMin = true, float relativeThreshold = 0);
     int associateGroundTruthDetections(QList<ResolvedDetection> &resolved, QList<ResolvedDetection> &falseNegative, QMap<QString, Detections> &all, QRectF &offsets);
     QStringList computeDetectionResults(const QList<ResolvedDetection> &detections, int totalTrueDetections, int numImages, bool discrete, QList<DetectionOperatingPoint> &points);
     inline int getNumberOfImages(const QMap<QString, Detections> detections)
@@ -88,6 +107,6 @@ namespace EvalUtils
     }
 }
 
-QDebug operator<<(QDebug dbg, const ResolvedDetection &d);
+QDebug operator<<(QDebug dbg, const EvalUtils::ResolvedDetection &d);
 
 #endif // EVALUTILS_EVALUTILS_H

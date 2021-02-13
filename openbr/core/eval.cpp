@@ -58,52 +58,47 @@ struct OperatingPoint
         : score(_score), FAR(_FAR), TAR(_TAR) {}
 };
 
-static OperatingPoint getOperatingPointGivenFAR(const QList<OperatingPoint> &operatingPoints, float FAR)
+static OperatingPoint getOperatingPoint(const QList<OperatingPoint> &operatingPoints, const QString key, const float value)
 {
-    int index = 0;
-    while (operatingPoints[index].FAR < FAR) {
-        index++;
-        if (index == operatingPoints.size())
-            return OperatingPoint(operatingPoints.last().score, FAR, operatingPoints.last().TAR);
+    int index        = key == "Score" ? operatingPoints.size()-1 : 0;
+    const int break_ = key == "Score" ? 0 : operatingPoints.size();
+    while ((key == "Score" ? operatingPoints[index].score :
+            key == "FAR"   ? operatingPoints[index].FAR   :
+                             operatingPoints[index].TAR) < value) {
+        index = index + (key == "Score" ? -1 : 1);
+        if (index == break_) {
+            if (key == "Score")
+                return OperatingPoint(value, operatingPoints.first().FAR, operatingPoints.first().TAR);
+            else if (key == "FAR")
+                return OperatingPoint(operatingPoints.last().score, value, operatingPoints.last().TAR);
+            return OperatingPoint(operatingPoints.last().score, operatingPoints.last().FAR, value);
+        }
     }
 
-    const float FAR1 = (index == 0 ? 0 : operatingPoints[index-1].FAR);
-    const float TAR1 = (index == 0 ? 0 : operatingPoints[index-1].TAR);
-    const float score1 = (index == 0 ? operatingPoints[index].score : operatingPoints[index-1].score);
-    const float FAR2 = operatingPoints[index].FAR;
-    const float TAR2 = operatingPoints[index].TAR;
+    const int index2 = (key == "Score" ? std::min(index+1, operatingPoints.size()-1) : index-1);
+    const float FAR1   = (index == 0 ? 0 : operatingPoints[index2].FAR);
+    const float TAR1   = (index == 0 ? 0 : operatingPoints[index2].TAR);
+    const float score1 = (index == 0 ? operatingPoints[index].score : operatingPoints[index2].score);
+    const float FAR2   = operatingPoints[index].FAR;
+    const float TAR2   = operatingPoints[index].TAR;
     const float score2 = operatingPoints[index].score;
-    const float mTAR = (TAR2 - TAR1) / (FAR2 - FAR1);
-    const float bTAR = TAR1 - mTAR*FAR1;
-    const float mScore = (score2 - score1) / (FAR2 - FAR1);
-    const float bScore = score1 - mScore*FAR1;
-    return OperatingPoint(mScore * FAR + bScore, FAR, mTAR * FAR + bTAR);
-}
 
-static OperatingPoint getOperatingPointGivenTAR(const QList<OperatingPoint> &operatingPoints, float TAR)
-{
-    int index = 0;
-    while (operatingPoints[index].TAR < TAR) {
-      index++;
-      if (index == operatingPoints.size())
-            return OperatingPoint(operatingPoints.last().score, operatingPoints.last().FAR, TAR);
-    }
+    const float denFAR = (FAR1 == FAR2 ? std::numeric_limits<float>::max() : (FAR2 - FAR1));
+    const float denScore = (score1 == score2 ? std::numeric_limits<float>::max() : (score2 - score1));
 
-    const float FAR1 = (index == 0 ? 0 : operatingPoints[index-1].FAR);
-    const float TAR1 = (index == 0 ? 0 : operatingPoints[index-1].TAR);
-    const float score1 = (index == 0 ? operatingPoints[index].score : operatingPoints[index-1].score);
-    const float FAR2 = operatingPoints[index].FAR;
-    const float TAR2 = operatingPoints[index].TAR;
-    const float score2 = operatingPoints[index].score;
-    const float mTAR = (TAR2 - TAR1) / (FAR2 - FAR1);
-    const float bTAR = TAR1 - mTAR*FAR1;
-    const float mScore = (score2 - score1) / (FAR2 - FAR1);
+    const float mFAR   = (FAR2 - FAR1) / denScore;
+    const float bFAR   = FAR1 - mFAR*score1;
+    const float mTAR   = (TAR2 - TAR1) / (key == "Score" ? denScore : denFAR);
+    const float bTAR   = TAR1 - mTAR*(key == "Score" ? score1 : FAR1);
+    const float mScore = (score2 - score1) / denFAR;
     const float bScore = score1 - mScore*FAR1;
 
-    const float FAR = (TAR - bTAR) / mTAR;
-    return OperatingPoint(mScore * FAR + bScore, FAR, TAR);
+    if (key == "Score")
+        return OperatingPoint(value, mFAR*value + bFAR, mTAR*value + bTAR);
+    else if (key == "FAR")
+        return OperatingPoint(mScore * value + bScore, value, mTAR * value + bTAR);
+    return OperatingPoint(mScore * ((value - bTAR) / mTAR) + bScore, (value - bTAR) / mTAR, value);
 }
-
 
 static float getCMC(const QVector<int> &firstGenuineReturns, int rank, size_t possibleReturns = 0)
 {
@@ -197,12 +192,12 @@ float Evaluate(const Mat &simmat, const Mat &mask, const File &csv, const QStrin
     float result = -1;
 
     // Make comparisons
-    QVector<Comparison> comparisons; comparisons.reserve(simmat.rows*simmat.cols);
+    std::vector<Comparison> comparisons; comparisons.reserve(simmat.rows*simmat.cols);
 
     // Flags rows as being mated or non-mated searches
     // Positive value: mated search, negative value: non-mated search
     // Value of 0: ignored search
-    QVector<int> genuineSearches(simmat.rows, 0);
+    std::vector<int> genuineSearches(simmat.rows, 0);
 
     int totalGenuineSearches = 0, totalImpostorSearches = 0;
     int genuineCount = 0, impostorCount = 0, numNaNs = 0;
@@ -213,7 +208,7 @@ float Evaluate(const Mat &simmat, const Mat &mask, const File &csv, const QStrin
             if (mask_val == BEE::DontCare) continue;
             if (simmat_val != simmat_val) { numNaNs++; continue; }
             Comparison comparison(simmat_val, j, i, mask_val == BEE::Match);
-            comparisons.append(comparison);
+            comparisons.push_back(comparison);
             if (comparison.genuine) {
                 if (genuineSearches[comparison.query] != 1) {
                     genuineSearches[comparison.query] = 1;
@@ -225,7 +220,7 @@ float Evaluate(const Mat &simmat, const Mat &mask, const File &csv, const QStrin
                     genuineSearches[comparison.query] = -1;
                 }
                 impostorCount++;
-            }                           
+            }
         }
     }
 
@@ -243,15 +238,15 @@ float Evaluate(const Mat &simmat, const Mat &mask, const File &csv, const QStrin
 
     QList<OperatingPoint> operatingPoints;
     QList<OperatingPoint> searchOperatingPoints;
-    QList<float> genuines; genuines.reserve(sqrt((float)comparisons.size()));
-    QList<float> impostors; impostors.reserve(comparisons.size());
+    std::vector<float> genuines; genuines.reserve(sqrt((float)comparisons.size()));
+    std::vector<float> impostors; impostors.reserve(comparisons.size());
     QVector<int> firstGenuineReturns(simmat.rows, 0);
 
     int falsePositives = 0, previousFalsePositives = 0;
     int truePositives = 0, previousTruePositives = 0;
     int falseSearches = 0, previousFalseSearches = 0;
     int trueSearches = 0, previousTrueSearches = 0;
-    int index = 0;
+    size_t index = 0;
     int EERIndex = 0;
     float minGenuineScore = std::numeric_limits<float>::max();
     float minImpostorScore = std::numeric_limits<float>::max();
@@ -269,7 +264,7 @@ float Evaluate(const Mat &simmat, const Mat &mask, const File &csv, const QStrin
                     // True positive identification
                     trueSearches++;
                 }
-                genuines.append(comparison.score);
+                genuines.push_back(comparison.score);
                 if (firstGenuineReturns[comparison.query] < 1)
                     firstGenuineReturns[comparison.query] = (comparison.score == -std::numeric_limits<float>::max())
                                                           ? std::numeric_limits<int>::max()
@@ -284,7 +279,7 @@ float Evaluate(const Mat &simmat, const Mat &mask, const File &csv, const QStrin
                     // False positive identification
                     falseSearches++;
                 }
-                impostors.append(comparison.score);
+                impostors.push_back(comparison.score);
                 if (firstGenuineReturns[comparison.query] < 1)
                     firstGenuineReturns[comparison.query]--;
                 if ((comparison.score != -std::numeric_limits<float>::max()) &&
@@ -343,7 +338,7 @@ float Evaluate(const Mat &simmat, const Mat &mask, const File &csv, const QStrin
             }
         }
         count = 0;
-        for (int i = EERIndex+1; i < comparisons.size(); i++) {
+        for (size_t i = EERIndex+1; i < comparisons.size(); i++) {
             if (comparisons[i].genuine) {
                 lines.append("GM,"+QString::number(comparisons[i].score)+","+targetFiles[comparisons[i].target].get<QString>("Label")+":"
                     +filePath+"/"+targetFiles[comparisons[i].target].name+":"+queryFiles[comparisons[i].query].get<QString>("Label")+":"+filePath+"/"+queryFiles[comparisons[i].query].name);
@@ -366,9 +361,9 @@ float Evaluate(const Mat &simmat, const Mat &mask, const File &csv, const QStrin
         float FRR = pow(10, -expFRR + i*FRRstep);
         float FPIR = pow(10, -expFPIR + i*FPIRstep);
 
-        OperatingPoint operatingPointFAR = getOperatingPointGivenFAR(operatingPoints, FAR);
-        OperatingPoint operatingPointTAR = getOperatingPointGivenTAR(operatingPoints, 1-FRR);
-        OperatingPoint searchOperatingPoint = getOperatingPointGivenFAR(searchOperatingPoints, FPIR);
+        OperatingPoint operatingPointFAR = getOperatingPoint(operatingPoints, "FAR", FAR);
+        OperatingPoint operatingPointTAR = getOperatingPoint(operatingPoints, "TAR", 1-FRR);
+        OperatingPoint searchOperatingPoint = getOperatingPoint(searchOperatingPoints, "FAR", FPIR);
         lines.append(QString("DET,%1,%2").arg(QString::number(FAR),
                                               QString::number(1-operatingPointFAR.TAR)));
         lines.append(QString("FAR,%1,%2").arg(QString::number(operatingPointFAR.score),
@@ -380,18 +375,30 @@ float Evaluate(const Mat &simmat, const Mat &mask, const File &csv, const QStrin
     }
 
     // Write TAR@FAR Table (TF)
-    foreach (float far, QList<float>() << 1e-6 << 1e-5 << 1e-4 << 1e-3 << 1e-2 << 1e-1)
+    foreach (float FAR, QList<float>() << 1e-6 << 1e-5 << 1e-4 << 1e-3 << 1e-2 << 1e-1)
       lines.append(qPrintable(QString("TF,%1,%2").arg(
-						      QString::number(far, 'f'),
-						      QString::number(getOperatingPointGivenFAR(operatingPoints, far).TAR, 'f', 3))));
+                              QString::number(FAR, 'f'),
+                              QString::number(getOperatingPoint(operatingPoints, "FAR", FAR).TAR, 'f', 3))));
 
     // Write FAR@TAR Table (FT)
-    foreach (float tar, QList<float>() << 0.4 << 0.5 << 0.65 << 0.75 << 0.85 << 0.95)
+    foreach (float TAR, QList<float>() << 0.4 << 0.5 << 0.65 << 0.75 << 0.85 << 0.95)
       lines.append(qPrintable(QString("FT,%1,%2").arg(
-                         QString::number(tar, 'f', 2),
-                         QString::number(getOperatingPointGivenTAR(operatingPoints, tar).FAR, 'f', 3))));
+                         QString::number(TAR, 'f', 2),
+                         QString::number(getOperatingPoint(operatingPoints, "TAR", TAR).FAR, 'f', 3))));
 
-    //Write CMC Table (CT)
+    // Write FAR@Score Table (SF) and TAR@Score table (ST)
+    foreach(const float score, QList<float>() << 0.05 << 0.1 << 0.15 << 0.2 << 0.25 << 0.3 << 0.35 << 0.4 << 0.45 << 0.5
+                                              << 0.55 << 0.6 << 0.65 << 0.7 << 0.75 << 0.8 << 0.85 << 0.9 << 0.95) {
+        const OperatingPoint op = getOperatingPoint(operatingPoints, "Score", score);
+        lines.append(qPrintable(QString("SF,%1,%2").arg(
+                                QString::number(score, 'f', 2),
+                                QString::number(op.FAR))));
+        lines.append(qPrintable(QString("ST,%1,%2").arg(
+                                QString::number(score, 'f', 2),
+                                QString::number(op.TAR))));
+    }
+
+    // Write CMC Table (CT)
     lines.append(qPrintable(QString("CT,1,%1").arg(QString::number(getCMC(firstGenuineReturns, 1), 'f', 3))));
     lines.append(qPrintable(QString("CT,5,%1").arg(QString::number(getCMC(firstGenuineReturns, 5), 'f', 3))));
     lines.append(qPrintable(QString("CT,10,%1").arg(QString::number(getCMC(firstGenuineReturns, 10), 'f', 3))));
@@ -400,8 +407,8 @@ float Evaluate(const Mat &simmat, const Mat &mask, const File &csv, const QStrin
     lines.append(qPrintable(QString("CT,100,%1").arg(QString::number(getCMC(firstGenuineReturns, 100), 'f', 3))));
 
     // Write FAR/TAR Bar Chart (BC)
-    lines.append(qPrintable(QString("BC,0.001,%1").arg(QString::number(getOperatingPointGivenFAR(operatingPoints, 0.001).TAR, 'f', 3))));
-    lines.append(qPrintable(QString("BC,0.01,%1").arg(QString::number(result = getOperatingPointGivenFAR(operatingPoints, 0.01).TAR, 'f', 3))));
+    lines.append(qPrintable(QString("BC,0.0001,%1").arg(QString::number(getOperatingPoint(operatingPoints, "FAR", 0.0001).TAR, 'f', 3))));
+    lines.append(qPrintable(QString("BC,0.001,%1").arg(QString::number(result = getOperatingPoint(operatingPoints, "FAR", 0.001).TAR, 'f', 3))));
 
     // Attempt to read template size from enrolled gallery and write to output CSV
     size_t maxSize(0);
@@ -411,7 +418,7 @@ float Evaluate(const Mat &simmat, const Mat &mask, const File &csv, const QStrin
     }
 
     // Write SD & KDE
-    int points = qMin(qMin(Max_Points, genuines.size()), impostors.size());
+    int points = qMin(qMin((size_t)Max_Points, genuines.size()), impostors.size());
     QList<double> sampledGenuineScores; sampledGenuineScores.reserve(points);
     QList<double> sampledImpostorScores; sampledImpostorScores.reserve(points);
 
@@ -430,7 +437,7 @@ float Evaluate(const Mat &simmat, const Mat &mask, const File &csv, const QStrin
 
     // Write Cumulative Match Characteristic (CMC) curve
     const int Max_Retrieval = 200;
-    const int Report_Retrieval = 5;
+    const QList<int> Report_Retrieval_List = QList<int>() << 1 << 5 << 10 << 20 << 50 << 100;
     for (int i=1; i<=Max_Retrieval; i++) {
         const float retrievalRate = getCMC(firstGenuineReturns, i);
         lines.append(qPrintable(QString("CMC,%1,%2").arg(QString::number(i), QString::number(retrievalRate))));
@@ -438,15 +445,18 @@ float Evaluate(const Mat &simmat, const Mat &mask, const File &csv, const QStrin
 
     QtUtils::writeFile(csv, lines);
     if (maxSize > 0) qDebug("Template Size: %i bytes", (int)maxSize);
-    qDebug("TAR @ FAR = 0.01:    %.3f",getOperatingPointGivenFAR(operatingPoints, 0.01).TAR);
-    qDebug("TAR @ FAR = 0.001:   %.3f",getOperatingPointGivenFAR(operatingPoints, 0.001).TAR);
-    qDebug("TAR @ FAR = 0.0001:  %.3f",getOperatingPointGivenFAR(operatingPoints, 0.0001).TAR);
-    qDebug("TAR @ FAR = 0.00001: %.3f",getOperatingPointGivenFAR(operatingPoints, 0.00001).TAR);
-
-    qDebug("FNIR @ FPIR = 0.1:   %.3f", 1-getOperatingPointGivenFAR(searchOperatingPoints, 0.1).TAR);
-    qDebug("FNIR @ FPIR = 0.01:  %.3f", 1-getOperatingPointGivenFAR(searchOperatingPoints, 0.01).TAR);
-
-    qDebug("\nRetrieval Rate @ Rank = %d: %.3f", Report_Retrieval, getCMC(firstGenuineReturns, Report_Retrieval));
+    foreach (float FAR, QList<float>() << 1e-2 << 1e-3 << 1e-4 << 1e-5 << 1e-6) {
+        const OperatingPoint op = getOperatingPoint(operatingPoints, "FAR", FAR);
+        printf("TAR & Similarity @ FAR = %.0e: %.3f %.3f\n", FAR, op.TAR, op.score);
+    }
+    printf("\n");
+    foreach (float FPIR, QList<float>() << 0.1 << 0.01) {
+        const OperatingPoint op = getOperatingPoint(searchOperatingPoints, "FAR", FPIR);
+        printf("FNIR @ FPIR = %.0e: %.3f\n", FPIR, 1-op.TAR);
+    }
+    printf("\n");
+    foreach (const int Report_Retrieval, Report_Retrieval_List)
+        printf("Retrieval Rate @ Rank = %d: %.3f\n", Report_Retrieval, getCMC(firstGenuineReturns, Report_Retrieval));
 
     return result;
 }
@@ -630,9 +640,9 @@ float InplaceEval(const QString &simmat, const QString &target, const QString &q
     qint64 impAccum = highImpostors;
 
     QMapIterator<float, GenImpCounts> i(genScoresToCounts);
-    
+
     i.toBack();
-   
+
     // iterating in reverse order of thresholds
     while (i.hasPrevious()) {
         i.previous();
@@ -669,8 +679,8 @@ float InplaceEval(const QString &simmat, const QString &target, const QString &q
 
     float result;
     // Write FAR/TAR Bar Chart (BC)
-    lines.append(qPrintable(QString("BC,0.001,%1").arg(QString::number(getOperatingPointGivenFAR(operatingPoints, 0.001).TAR, 'f', 3))));
-    lines.append(qPrintable(QString("BC,0.01,%1").arg(QString::number(result = getOperatingPointGivenFAR(operatingPoints, 0.01).TAR, 'f', 3))));
+    lines.append(qPrintable(QString("BC,0.001,%1").arg(QString::number(getOperatingPoint(operatingPoints, "FAR", 0.001).TAR, 'f', 3))));
+    lines.append(qPrintable(QString("BC,0.01,%1").arg(QString::number(result = getOperatingPoint(operatingPoints, "FAR", 0.01).TAR, 'f', 3))));
 
     qDebug("TAR @ FAR = 0.01: %.3f", result);
     QtUtils::writeFile(csv, lines);
@@ -757,37 +767,41 @@ void EvalClassification(const QString &predictedGallery, const QString &truthGal
     qDebug("Overall Accuracy = %f", (float)tpc / (float)(tpc + fnc));
 }
 
-float EvalDetection(const QString &predictedGallery, const QString &truthGallery, const QString &csv, bool normalize, int minSize, int maxSize)
+float EvalDetection(const QString &predictedGallery, const QString &truthGallery, const QString &csv, bool normalize, int minSize, int maxSize, float relativeMinSize)
 {
     qDebug("Evaluating detection of %s against %s", qPrintable(predictedGallery), qPrintable(truthGallery));
     // Organized by file, QMap used to preserve order
     QMap<QString, Detections> allDetections = getDetections(predictedGallery, truthGallery);
 
     // Remove any bounding boxes with a side smaller than minSize
-    if (minSize > 0) {
-        qDebug("Removing boxes smaller than %d\n", minSize);
-        allDetections = filterDetections(allDetections,minSize);
+    if (minSize > 0 || relativeMinSize > 0) {
+        if (Globals->verbose)
+            qDebug("Removing boxes smaller than %d\n", minSize);
+        allDetections = filterDetections(allDetections, minSize, true, relativeMinSize);
     }
 
     // Remove any bounding boxes with no side smaller than maxSize
     if (maxSize > 0) {
-        qDebug("Removing boxes larger than %d\n", maxSize);
-        allDetections = filterDetections(allDetections,maxSize,false);
+        if (Globals->verbose)
+            qDebug("Removing boxes larger than %d\n", maxSize);
+        allDetections = filterDetections(allDetections, maxSize, false);
     }
 
     QList<ResolvedDetection> resolvedDetections, falseNegativeDetections;
     QRectF normalizations(0, 0, 0, 0);
-    
+
     // Associate predictions to ground truth
     int totalTrueDetections = associateGroundTruthDetections(resolvedDetections, falseNegativeDetections, allDetections, normalizations);
 
     // Redo association of ground truth to predictions with boundingBoxes
     // resized based on the average differences on each side.
     if (normalize) {
-        qDebug("dX = %.3f", normalizations.x());
-        qDebug("dY = %.3f", normalizations.y());
-        qDebug("dWidth = %.3f", normalizations.width());
-        qDebug("dHeight = %.3f", normalizations.height());
+        if (Globals->verbose) {
+            qDebug("dX = %.3f", normalizations.x());
+            qDebug("dY = %.3f", normalizations.y());
+            qDebug("dWidth = %.3f", normalizations.width());
+            qDebug("dHeight = %.3f", normalizations.height());
+        }
         resolvedDetections.clear();
         falseNegativeDetections.clear();
         totalTrueDetections = associateGroundTruthDetections(resolvedDetections, falseNegativeDetections, allDetections, normalizations);
@@ -795,7 +809,7 @@ float EvalDetection(const QString &predictedGallery, const QString &truthGallery
 
     if (Globals->verbose) {
         qDebug("Total False negatives:");
-        const int numFalseNegatives = 50;
+        const int numFalseNegatives = std::min(50, falseNegativeDetections.size());
         for (int i=0; i<numFalseNegatives; i++) {
             Mat img = imread(qPrintable(Globals->path + "/" + falseNegativeDetections[i].filePath));
             qDebug() << falseNegativeDetections[i];
@@ -830,7 +844,7 @@ float EvalDetection(const QString &predictedGallery, const QString &truthGallery
     lines.append(QString("AverageOverlap,%1,").arg(QString::number(averageOverlap)));
 
     QtUtils::writeFile(csv, lines);
-    qDebug("Average Overlap = %.3f", averageOverlap);
+    qDebug("Average Overlap = %.4f\n", averageOverlap);
     return averageOverlap;
 }
 
@@ -885,6 +899,8 @@ float EvalLandmarking(const QString &predictedGallery, const QString &truthGalle
             // Or the ground truth seems to be for another object in the image
             || (QtUtils::euclideanLength(predictedPoints[normalizationIndexA] - truthPoints[normalizationIndexA]) / normalizedLength >= 0.5)
             || (QtUtils::euclideanLength(predictedPoints[normalizationIndexB] - truthPoints[normalizationIndexB]) / normalizedLength >= 0.5)
+            // Or the predicted image FTE'd
+            || predicted[i].file.fte || predicted[i].file.getBool("FTE")
            ) {
             predicted.removeAt(i);
             predictedNames.removeAt(i);
@@ -1235,73 +1251,179 @@ void EvalKNN(const QString &knnGraph, const QString &knnTruth, const QString &cs
                                      QString::number(operatingPoint.score) + "\n"));
     }
 
-    qDebug("FNIR @ FPIR = 0.1:   %.3f", 1-getOperatingPointGivenFAR(operatingPoints, 0.1).TAR);
-    qDebug("FNIR @ FPIR = 0.01:  %.3f", 1-getOperatingPointGivenFAR(operatingPoints, 0.01).TAR);
+    qDebug("FNIR @ FPIR = 0.1:   %.3f", 1-getOperatingPoint(operatingPoints, "FAR", 0.1).TAR);
+    qDebug("FNIR @ FPIR = 0.01:  %.3f", 1-getOperatingPoint(operatingPoints, "FAR", 0.01).TAR);
 }
 
-void EvalEER(const QString &predictedXML, QString gt_property, QString distribution_property){
+void EvalEER(const QString &predictedXML, QString gt_property, QString distribution_property, const QString &csv) {
     if (gt_property.isEmpty())
-            gt_property = "LivenessGT";
+        gt_property = "LivenessGT";
     if (distribution_property.isEmpty())
-            distribution_property = "LivenessDistribution";
-    double classOneTemplateCount = 0;
+        distribution_property = "LivenessClassScores";
+    int classOneTemplateCount = 0;
     const TemplateList templateList(TemplateList::fromGallery(predictedXML));
 
-    QHash<QString, int> gtLabels;
-    QHash<QString, QList<float> > scores;
-     for (double i=0; i<templateList.size(); i++) {
-	 if (!templateList[i].file.contains(distribution_property) || !templateList[i].file.contains(gt_property))
-             continue;
-         QString templateKey = templateList[i].file.path() + templateList[i].file.baseName();
-         int gtLabel = templateList[i].file.get<int>(gt_property);
-         if (gtLabel == 1)
-             classOneTemplateCount++;
-         QList<float> templateScores = templateList[i].file.getList<float>(distribution_property);
-         gtLabels[templateKey] = gtLabel;
-         scores[templateKey] = templateScores;
-     }
+    QList<QPair<float, int>> scores;
+    QList<float> classZeroScores, classOneScores;
+    for (int i=0; i<templateList.size(); i++) {
+        if (!templateList[i].file.contains(distribution_property) || !templateList[i].file.contains(gt_property))
+            continue;
 
-     const int numPoints = 200;
-     const float stepSize = 100.0/numPoints;
-     const double numTemplates = scores.size();
-     float thres = 0.0; //Between [0,100]
-     float thresNorm = 0.0; //Between [0,1]
-     double FA = 0, FR = 0;
-     float minDiff = 100;
-     float EER = 100;
-     float EERThres = 0;
+        const int gtLabel = templateList[i].file.get<int>(gt_property);
+        const float templateScore = templateList[i].file.get<float>(distribution_property);
+        scores.append(qMakePair(templateScore, gtLabel));
 
-     for(int i = 0; i <= numPoints; i++){
-         FA = 0, FR = 0;
-         thresNorm = thres/100.0;
-            foreach(const QString &key, scores.keys()){
-                int gtLabel = gtLabels[key];
-                //> thresNorm = class 0 (spoof) : < thresNorm = class 1 (genuine)
-                if (scores[key][0] >= thresNorm && gtLabel == 0)
-                    continue;
-                else if (scores[key][0] < thresNorm && gtLabel == 1)
-                    continue;
-                else if (scores[key][0] >= thresNorm && gtLabel == 1)
-                    FR +=1;
-                else if (scores[key][0] < thresNorm && gtLabel == 0)
-                    FA +=1;
+        if (gtLabel == 1) {
+            classOneTemplateCount++;
+            classOneScores.append(templateScore);
+        } else {
+            classZeroScores.append(templateScore);
+        }
+    }
+
+    std::sort(scores.begin(), scores.end());
+
+    QList<OperatingPoint> operatingPoints;
+
+    const int classZeroTemplateCount = scores.size() - classOneTemplateCount;
+    int falsePositives = 0, previousFalsePositives = 0;
+    int truePositives = 0, previousTruePositives = 0;
+    size_t index = 0;
+    float minDiff = 100, EER = 100, EERThres = 0;
+    float minClassOneScore = std::numeric_limits<float>::max();
+    float minClassZeroScore = std::numeric_limits<float>::max();
+
+    while (index < scores.size()) {
+        float thresh = scores[index].first;
+        // Compute genuine and imposter statistics at a threshold
+        while ((index < scores.size()) &&
+               (scores[index].first == thresh)) {
+            if (scores[index].second) {
+                truePositives++;
+                if (scores[index].first != -std::numeric_limits<float>::max() && scores[index].first < minClassOneScore) 
+                    minClassOneScore = scores[index].first;
+            } else {
+                falsePositives++;
+                if (scores[index].first != -std::numeric_limits<float>::max() && scores[index].first < minClassZeroScore) 
+                    minClassZeroScore = scores[index].first;
             }
-            float FAR = FA / fabs(numTemplates - classOneTemplateCount);
-            float FRR = FR / float(classOneTemplateCount);
+            index++;
+        }
+        
+        if ((falsePositives > previousFalsePositives) &&
+             (truePositives > previousTruePositives)) {
+            const float FAR = float(falsePositives) / classZeroTemplateCount;
+            const float TAR = float(truePositives) / classOneTemplateCount;
+            const float FRR = 1 - TAR;
+            operatingPoints.append(OperatingPoint(thresh, FAR, TAR));
 
-            float diff = std::abs(FAR-FRR);
-            if (diff < minDiff){
+            const float diff = std::abs(FAR-FRR);
+            if (diff < minDiff) {
                 minDiff = diff;
                 EER = (FAR+FRR)/2.0;
-                EERThres = thresNorm;
+                EERThres = thresh;
             }
-         thres += stepSize;
-     }
 
-     qDebug() <<"Class 0 Templates:" << fabs(numTemplates - classOneTemplateCount) << "Class 1 Templates:"
-             << classOneTemplateCount << "Total Templates:" << numTemplates;
-     qDebug("EER: %.3f @ Threshold %.3f", EER*100, EERThres);
+            previousFalsePositives = falsePositives;
+            previousTruePositives = truePositives;
+        }
+    }
+
+    if (operatingPoints.size() == 0) operatingPoints.append(OperatingPoint(1, 1, 1));
+    if (operatingPoints.size() == 1) operatingPoints.prepend(OperatingPoint(0, 0, 0));
+    if (operatingPoints.size() > 2)  operatingPoints.takeLast(); // Remove point (1,1)
+
+    printf("\n==========================================================\n");
+    printf("Class 0 Templates: %d\tClass 1 Templates: %d\tTotal Templates: %d\n",
+           classZeroTemplateCount, classOneTemplateCount, classZeroTemplateCount + classOneTemplateCount);
+    printf("----------------------------------------------------------\n");
+    foreach (float FAR, QList<float>() << 0.2 << 0.1 << 0.05 << 0.01 << 0.001 << 0.0001) {
+        const OperatingPoint op = getOperatingPoint(operatingPoints, "FAR", FAR);
+        printf("TAR = %.3f @ FAR = %.4f | Threshold= %.3f\n", op.TAR, FAR, op.score);
+
+    }
+    printf("----------------------------------------------------------\n");
+    foreach (float TAR, QList<float>() << 0.8 << 0.85 << 0.9 << 0.95 << 0.98) {
+        const OperatingPoint op = getOperatingPoint(operatingPoints, "TAR", TAR);
+        printf("FAR = %.3f @ TAR = %.4f | Threshold= %.3f\n", op.FAR, TAR, op.score);
+
+    }
+    printf("----------------------------------------------------------\n");
+    printf("EER: %.3f @ Threshold %.3f\n", EER*100, EERThres);
+    printf("==========================================================\n\n");
+
+    // Optionally write ROC curve
+    if (!csv.isEmpty()) {
+    QStringList lines;
+        lines.append("Plot,X,Y");
+        lines.append("Metadata,"+QString::number(classZeroTemplateCount+classOneTemplateCount)+",Total Templates");
+        lines.append("Metadata,"+QString::number(classZeroTemplateCount)+",Class 0 Template Count");
+        lines.append("Metadata,"+QString::number(classOneTemplateCount)+",Class 1 Template Count");
+
+        // Write Detection Error Tradeoff (DET), PRE, REC
+        float expFAR = std::max(ceil(log10(classZeroTemplateCount)), 1.0);
+        float expFRR = std::max(ceil(log10(classOneTemplateCount)), 1.0);
+
+        float FARstep = expFAR / (float)(Max_Points - 1);
+        float FRRstep = expFRR / (float)(Max_Points - 1);
+
+        for (int i=0; i<Max_Points; i++) {
+            float FAR = pow(10, -expFAR + i*FARstep);
+            float FRR = pow(10, -expFRR + i*FRRstep);
+
+            OperatingPoint operatingPointFAR = getOperatingPoint(operatingPoints, "FAR", FAR);
+            OperatingPoint operatingPointTAR = getOperatingPoint(operatingPoints, "TAR", 1-FRR);
+            lines.append(QString("DET,%1,%2").arg(QString::number(FAR),
+                                                  QString::number(1-operatingPointFAR.TAR)));
+            lines.append(QString("FAR,%1,%2").arg(QString::number(operatingPointFAR.score),
+                                                  QString::number(FAR)));
+            lines.append(QString("FRR,%1,%2").arg(QString::number(operatingPointTAR.score),
+                                                  QString::number(FRR)));
+        }
+    
+        // Write TAR@FAR Table (TF)
+        foreach (float FAR, QList<float>() << 0.2 << 0.1 << 0.05 << 0.01 << 0.001 << 0.0001)
+            lines.append(qPrintable(QString("TF,%1,%2").arg(
+                                    QString::number(FAR, 'f'),
+                                    QString::number(getOperatingPoint(operatingPoints, "FAR", FAR).TAR, 'f', 3))));
+
+        // Write FAR@TAR Table (FT)
+        foreach (float TAR, QList<float>() << 0.8 << 0.85 << 0.9 << 0.95 << 0.98)
+            lines.append(qPrintable(QString("FT,%1,%2").arg(
+                                        QString::number(TAR, 'f', 2),
+                                        QString::number(getOperatingPoint(operatingPoints, "TAR", TAR).FAR, 'f', 3))));
+
+        // Write FAR@Score Table (SF) and TAR@Score table (ST)
+        foreach(const float score, QList<float>() << 0.05 << 0.1 << 0.15 << 0.2 << 0.25 << 0.3 << 0.35 << 0.4 << 0.45 << 0.5
+                                                  << 0.55 << 0.6 << 0.65 << 0.7 << 0.75 << 0.8 << 0.85 << 0.9 << 0.95) {
+            const OperatingPoint op = getOperatingPoint(operatingPoints, "Score", score);
+            lines.append(qPrintable(QString("SF,%1,%2").arg(
+                                        QString::number(score, 'f', 2),
+                                        QString::number(op.FAR))));
+            lines.append(qPrintable(QString("ST,%1,%2").arg(
+                                        QString::number(score, 'f', 2),
+                                        QString::number(op.TAR))));
+        }
+
+        // Write FAR/TAR Bar Chart (BC)
+        lines.append(qPrintable(QString("BC,0.0001,%1").arg(QString::number(getOperatingPoint(operatingPoints, "FAR", 0.0001).TAR, 'f', 3))));
+        lines.append(qPrintable(QString("BC,0.001,%1").arg(QString::number(getOperatingPoint(operatingPoints, "FAR", 0.001).TAR, 'f', 3))));
+
+        // Write SD & KDE
+        int points = qMin(qMin(Max_Points, classZeroScores.size()), classOneScores.size());
+        if (points > 1) {
+            for (int i=0; i<points; i++) {
+                float classZeroScore = classZeroScores[double(i) / double(points-1) * double(classZeroScores.size()-1)];
+                float classOneScore = classOneScores[double(i) / double(points-1) * double(classOneScores.size()-1)];
+                if (classZeroScore == -std::numeric_limits<float>::max()) classZeroScore = minClassZeroScore;
+                if (classOneScore == -std::numeric_limits<float>::max()) classOneScore = minClassOneScore;
+                lines.append(QString("SD,%1,Genuine").arg(QString::number(classOneScore)));
+                lines.append(QString("SD,%1,Impostor").arg(QString::number(classZeroScore)));
+            }
+        }
+
+        QtUtils::writeFile(csv, lines);
+    }
 }
-
 
 } // namespace br

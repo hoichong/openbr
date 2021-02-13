@@ -27,6 +27,7 @@
 #include <QRegularExpression>
 #include <QStack>
 #include <QUrl>
+#include <QJsonArray>
 #include <openbr/openbr_plugin.h>
 
 #include "alphanum.hpp"
@@ -171,12 +172,20 @@ QString find(const QString &file, const QString &alt)
     return "";
 }
 
-bool toBool(const QString &string)
+bool toBool(const QString &string, bool *ok)
 {
-    bool ok;
-    bool result = (string.toFloat(&ok) != 0.f);
-    if (ok) return result;
-    else    return (string != "FALSE") && (string != "false") && (string != "F") && (string != "f");
+    bool floatOk;
+    bool result = (string.toFloat(&floatOk) != 0.f);
+    if (floatOk) {
+        if (ok) *ok = true;
+        return result;
+    } else {
+        if (ok) *ok = (string.compare("false", Qt::CaseInsensitive) == 0 ||
+                       string.compare("true", Qt::CaseInsensitive)  == 0 ||
+                       string.compare("f", Qt::CaseInsensitive)     == 0 ||
+                       string.compare("t", Qt::CaseInsensitive)     == 0);
+        return (string.compare("false", Qt::CaseInsensitive) != 0 && string.compare("f", Qt::CaseInsensitive) != 0);
+    }
 }
 
 int toInt(const QString &string)
@@ -244,10 +253,10 @@ QStringList parse(QString args, char split, bool *ok)
     QStack<QChar> subexpressions;
     for (int i=0; i<args.size(); i++) {
         if (inQuote) {
-            if (args[i] == '\'')
+            if (args[i] == '\'' || args[i] == '\"')
                 inQuote = false;
         } else {
-            if (args[i] == '\'') {
+            if (args[i] == '\'' || args[i] == '\"') {
                 inQuote = true;
             } else if ((args[i] == '(') || (args[i] == '[') || (args[i] == '<') || (args[i] == '{')) {
                 subexpressions.push(args[i]);
@@ -276,7 +285,10 @@ QStringList parse(QString args, char split, bool *ok)
                     return words;
                 }
             } else if (subexpressions.isEmpty() && (args[i] == split)) {
-                words.append(args.mid(start, i-start).trimmed());
+                QString word = args.mid(start, i-start).trimmed();
+                if (word.contains('\'') || word.contains('\"'))
+                    word = word.mid(1, word.size()-2);
+                words.append(word);
                 start = i+1;
             }
         }
@@ -433,6 +445,15 @@ QString toString(const QVariantList &variantList)
 
 QString toString(const QMap<QString,QVariant> &variantMap)
 {
+    QStringList variants = toStringList(variantMap);
+
+    if (!variants.isEmpty()) return "[" + variants.join(", ") + "]";
+
+    return QString();
+}
+
+QStringList toStringList(const QMap<QString,QVariant> &variantMap)
+{
     QStringList variants;
 
     QMapIterator<QString, QVariant> i(variantMap);
@@ -441,9 +462,88 @@ QString toString(const QMap<QString,QVariant> &variantMap)
         variants.append(i.key() + "=" + toString(i.value()));
     }
 
-    if (!variants.isEmpty()) return "[" + variants.join(", ") + "]";
+    return variants;
+}
 
-    return QString();
+QJsonValue fromVariant(const QVariant &variant)
+{
+    // Convert any formats that can be natively stored as JSON
+    if (variant.canConvert<bool>() || variant.canConvert<double>() || variant.canConvert<QString>())
+        return QJsonValue::fromVariant(variant);
+
+    // If array, recurse
+    if (variant.canConvert<QVariantList>()) {
+        QJsonArray jsonArray;
+        foreach (const QVariant &v, variant.toList())
+            jsonArray.append(fromVariant(v));
+        return QJsonValue(jsonArray);
+    }
+
+    return QJsonValue(QtUtils::toString(variant));
+}
+
+QJsonObject fromVariantMap(const QVariantMap &variantMap)
+{
+    QJsonObject jsonObject;
+    QMap<QString, QVariant>::const_iterator i;
+    for (i = variantMap.begin(); i != variantMap.end(); i++)
+        jsonObject.insert(i.key(), fromVariant(i.value()));
+    return jsonObject;
+}
+
+QVariant fromJsonValue(const QJsonValue &value)
+{
+    QVariant variant;
+    QJsonValue::Type t = value.type();
+    if (t == QJsonValue::Null)
+        return QVariant();
+    else if (t == QJsonValue::Bool || t == QJsonValue::Double)
+        return value.toVariant();
+    else if (t == QJsonValue::String)
+        return QtUtils::fromString(value.toString());
+    else if (t == QJsonValue::Array) {
+        const QJsonArray array = value.toArray();
+        QVariantList variantList;
+        foreach (const QJsonValue &arrayValue, array)
+            variantList.append(fromJsonValue(arrayValue));
+        return variantList;
+    } else if (t == QJsonValue::Object)
+        return fromJsonObject(value.toObject());
+    else // QJsonValue::Undefined
+        return QVariant();
+}
+
+QVariantMap fromJsonObject(const QJsonObject &object)
+{
+    QVariantMap variantMap;
+    foreach (const QString &key, object.keys())
+        variantMap.insert(key, fromJsonValue(object.value(key)));
+    return variantMap;
+}
+
+QVariant fromString(const QString &value)
+{
+    if (value.startsWith('[') && value.endsWith(']')) {
+        QVariantList variants;
+        foreach (const QString &value, QtUtils::parse(value.mid(1, value.size()-2)))
+            variants.append(fromString(value));
+        return variants;
+    }
+
+    bool ok = false;
+    const QPointF point = QtUtils::toPoint(value, &ok);
+    if (ok) return point;
+    const QRectF rect = QtUtils::toRect(value, &ok);
+    if (ok) return rect;
+    const cv::RotatedRect rotatedRect = OpenCVUtils::rotateRectFromString(value, &ok);
+    if (ok) return QVariant::fromValue(rotatedRect);
+    const int i = value.toInt(&ok);
+    if (ok) return i;
+    const float f = value.toFloat(&ok);
+    if (ok) return f;
+    const bool b = QtUtils::toBool(value, &ok);
+    if (ok) return b;
+    return value;
 }
 
 QString toTime(int s)
@@ -467,10 +567,15 @@ float orientation(const QPointF &pointA, const QPointF &pointB)
     return atan2(pointB.y() - pointA.y(), pointB.x() - pointA.x());
 }
 
-float overlap(const QRectF &r, const QRectF &s) {
-    QRectF intersection = r & s;
+float area(const QRectF &r)
+{
+    return r.width() * r.height();
+}
 
-    return (intersection.width()*intersection.height())/(r.width()*r.height());
+float overlap(const QRectF &r, const QRectF &s) {
+    const QRectF intersected = r.intersected(s);
+    const float areaIntersected = area(intersected);
+    return areaIntersected / (area(r) + area(s) - areaIntersected);
 }
 
 
@@ -544,7 +649,7 @@ void BlockCompression::close()
 
         quint32 bsize=  compressedBlock.size();
         blockWriter << bsize;
-        blockWriter.writeRawData(compressedBlock.data(), compressedBlock.size());
+        blockWriter.writeRawData(compressedBlock.constData(), compressedBlock.size());
     }
     // close the underlying device.
     basis->close();
@@ -641,7 +746,7 @@ qint64 BlockCompression::writeData(const char *data, qint64 remaining)
                 quint32 block_size = compressedBlock.size();
                 blockWriter << block_size;
 
-                int write_count = blockWriter.writeRawData(compressedBlock.data(), block_size);
+                int write_count = blockWriter.writeRawData(compressedBlock.constData(), block_size);
                 if (write_count != int(block_size))
                     qFatal("Didn't write enough data");
             }

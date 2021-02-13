@@ -44,9 +44,9 @@ private:
             Caffe::set_mode(Caffe::CPU);
         }
 
+        FLAGS_minloglevel = google::ERROR; // Disable Caffe's verbose output before loading any models
         CaffeNet *net = new CaffeNet(model, caffe::TEST);
-        net->CopyTrainedLayersFrom(weights.toStdString());
-        FLAGS_minloglevel = google::ERROR; // Disable Caffe's verbose output after loading the first model
+        net->CopyTrainedLayersFromBinaryProto(weights.toStdString());
         return net;
     }
 };
